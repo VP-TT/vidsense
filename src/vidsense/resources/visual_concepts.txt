@@ -1,0 +1,190 @@
+# Labels for zero-shot CLIP tagging of keyframes, one per line.
+# Each label is read as "a photo of <label>." and "a video frame showing <label>.",
+# and the winning labels are written into the chunk text as "On screen: ...".
+# Replace this list with VIDSENSE_TAG_VOCAB=/path/to/labels.txt for a specific domain.
+
+# Screens, slides and studio shots
+a presentation slide with text
+a slide with a chart or graph
+a slide with a diagram
+a whiteboard with writing
+a blackboard with chalk writing
+a computer screen with code
+a terminal window with text
+a website on a computer screen
+a spreadsheet
+a map
+a document or page of text
+a handwritten note
+a title card with large text
+text on a dark background
+an animated cartoon
+a drawing or illustration
+a 3D rendering
+a video game
+a black screen
+a blurry image
+a person talking to the camera
+a news anchor in a studio
+an interview between two people
+a podcast studio with microphones
+a group of people in a meeting
+a lecture hall with an audience
+a classroom with students
+a teacher in front of a class
+a conference stage with a speaker
+a person at a desk with a laptop
+
+# Places, indoors
+an office
+a kitchen
+a living room
+a bedroom
+a bathroom
+a restaurant
+a cafe
+a shop or supermarket
+a gym
+a hospital room
+a laboratory
+a factory floor
+a warehouse
+a workshop with tools
+a garage
+a library with bookshelves
+a museum
+a church interior
+a stage with performers
+a concert with a crowd
+a movie theater
+an airport terminal
+a train station
+a hotel room
+a swimming pool
+
+# Places, outdoors
+a city street
+tall buildings and skyscrapers
+a city skyline at night
+cars on a road
+a highway with traffic
+a parking lot
+a bridge
+a park
+a garden with flowers
+a farm field
+a forest with trees
+a jungle
+mountains
+snowy mountains
+a desert with sand dunes
+a beach
+the ocean with waves
+a lake or river
+a waterfall
+a sunset over the sea
+the night sky with stars
+the moon in the night sky
+clouds in a blue sky
+rain or a storm
+snow falling
+a campfire
+a backyard
+a playground
+a stadium
+a sports field
+a construction site
+a village with small houses
+an island
+
+# People and activities
+a person cooking food
+a plate of food
+a person eating
+a person drinking coffee
+a person playing guitar
+a person playing piano
+a person playing drums
+a person playing violin
+a person singing into a microphone
+people dancing
+a person running
+a person riding a bicycle
+a person lifting weights
+a person doing yoga
+a person swimming
+a person surfing
+a person skiing or snowboarding
+a person skateboarding
+a person climbing a rock wall
+a person hiking on a trail
+a person fishing
+a soccer game
+a basketball game
+a tennis match
+a baseball game
+a golf course
+a boxing or martial arts match
+people playing a board game
+a person painting a picture
+a person drawing on paper
+a person writing by hand
+a person reading a book
+a person typing on a keyboard
+a person using a smartphone
+a person shopping
+a person cleaning a room
+a person washing dishes
+a person gardening
+a person repairing a machine
+a person applying makeup
+a person getting a haircut
+a person walking a dog
+a person driving a car
+children playing
+a baby
+a family at a dinner table
+a wedding
+a birthday party
+a crowd of people
+a parade or festival
+a protest or rally
+
+# Objects, vehicles and animals
+a car
+a truck
+a bus
+a motorcycle
+a bicycle
+a train
+an airplane
+a helicopter
+a boat on the water
+a sailboat
+a ship at sea
+a rocket launch
+space and planets
+a satellite image of the earth
+a robot
+a drone
+electronic circuits
+a microscope image
+a laptop computer
+a smartphone screen
+a camera
+headphones
+a product close-up
+hands holding an object
+tools on a workbench
+machinery
+a book
+money and coins
+clothing on display
+a dog
+a cat
+a horse
+a cow
+birds
+a fish underwater
+wild animals in nature
+insects

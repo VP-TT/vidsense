@@ -33,7 +33,7 @@ class ProcessingConfig:
     frame_fps: float = 1.0  # frames sampled per second of video
     max_frames: int = 1800  # long videos are sampled more sparsely to stay under this
     clip_model: str = "openai/clip-vit-base-patch32"
-    seconds_per_keyframe: float = 12.0  # K = duration / this, before de-duplication
+    seconds_per_keyframe: float = 5.0  # K = duration / this; over-cluster, then merge near-duplicates
     time_weight: float = 0.3  # how strongly K-means keeps clusters contiguous in time
     dedup_threshold: float = 0.95  # merge neighbouring keyframes above this cosine similarity
     visual_tags: bool = True  # zero-shot CLIP labels for each keyframe
