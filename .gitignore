@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+
+# VidSense runtime data: uploaded videos, thumbnails, Chroma index, eval reports
+data/
+demo/
+
+# Local configuration
+.env
+.streamlit/secrets.toml
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
