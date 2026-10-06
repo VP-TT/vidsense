@@ -1,0 +1,9 @@
+[server]
+# Uploads are held in memory; for bigger files use "From disk" in the sidebar.
+maxUploadSize = 1024
+# Streamlit's file watcher probes every loaded module, which makes transformers import
+# optional vision code (and log hundreds of errors). Restart the app after code changes.
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false

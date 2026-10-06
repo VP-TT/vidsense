@@ -223,6 +223,16 @@ def cmd_delete(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_ui(args: argparse.Namespace, settings: Settings) -> int:
+    import subprocess
+    from pathlib import Path
+
+    app = Path(__file__).with_name("app.py")
+    command = [sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port)]
+    command += ["--browser.gatherUsageStats", "false", "--server.maxUploadSize", "1024", "--server.fileWatcherType", "none"]
+    return subprocess.call(command)
+
+
 def cmd_demo(args: argparse.Namespace, settings: Settings) -> int:
     from .demo import make_demo
 
@@ -285,6 +295,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("delete", help="remove a video's index and artifacts")
     p.add_argument("video_ref")
     p.set_defaults(func=cmd_delete)
+
+    p = sub.add_parser("ui", help="open the Streamlit app")
+    p.add_argument("--port", type=int, default=8501)
+    p.set_defaults(func=cmd_ui)
 
     p = sub.add_parser("demo", help="generate a synthetic demo video and QA file")
     p.add_argument("--out", default="demo", help="output folder (default: demo)")
