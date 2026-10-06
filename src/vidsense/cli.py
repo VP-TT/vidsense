@@ -28,6 +28,27 @@ def _processing_overrides(args: argparse.Namespace, settings: Settings) -> Setti
     return replace(settings, processing=replace(settings.processing, **changes))
 
 
+def _answer_overrides(args: argparse.Namespace, settings: Settings) -> Settings:
+    changes = {"provider": args.provider, "model": args.model, "ollama_url": args.ollama_url}
+    changes = {k: v for k, v in changes.items() if v is not None}
+    if "provider" in changes and "model" not in changes:
+        changes["model"] = ""  # the new provider's default model
+    if getattr(args, "k", None):
+        changes["top_k"] = args.k
+    return replace(settings, answer=replace(settings.answer, **changes))
+
+
+def _ensure_llm(settings: Settings) -> Settings:
+    """Fall back to retrieval-only mode, with a hint, when the LLM isn't reachable."""
+    from .llm import check_llm
+
+    ready, message = check_llm(settings.answer)
+    if not ready and settings.answer.provider != "none":
+        print(f"note: {message}\nShowing the best-matching moments instead.\n", file=sys.stderr)
+        return replace(settings, answer=replace(settings.answer, provider="none"))
+    return settings
+
+
 def _progress_printer():
     from tqdm import tqdm
 
@@ -139,6 +160,59 @@ def cmd_search(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_ask(args: argparse.Namespace, settings: Settings) -> int:
+    from .qa import VideoQA
+    from .store import VideoLibrary
+
+    settings = _ensure_llm(_answer_overrides(args, settings))
+    record = VideoLibrary(settings).resolve(args.video_ref)
+    answer = None
+    thinking = False
+    for kind, payload in VideoQA(settings, record.video_id).stream(args.question):
+        if kind == "reasoning" and args.show_reasoning:
+            if not thinking:
+                print("[reasoning]", file=sys.stderr)
+                thinking = True
+            print(payload, end="", flush=True, file=sys.stderr)
+        elif kind == "reasoning" and not thinking:
+            print("(thinking...)", end="\r", flush=True, file=sys.stderr)
+            thinking = True
+        elif kind == "done":
+            answer = payload
+    if thinking:  # end the reasoning block, or erase the "(thinking...)" note
+        print("\n" if args.show_reasoning else " " * 14 + "\r", end="", file=sys.stderr, flush=True)
+    # Printed once complete, so reasoning that arrives without an opening tag never leaks into the answer.
+    print(answer.text)
+    print("\nSources:")
+    for doc in answer.sources:
+        meta = doc.metadata
+        snippet = meta["transcript"] or "On screen: " + "; ".join(meta["tags"])
+        print(f"  [{format_range(meta['start'], meta['end'])}] {textwrap.shorten(snippet, 90)}")
+    cited = ", ".join(format_ts(t) for t in answer.citations) or "none"
+    print(f"\nCited: {cited} | retrieval {answer.retrieval_ms:.0f} ms, total {answer.total_ms / 1000:.1f} s, {answer.model}")
+    return 0
+
+
+def cmd_summarize(args: argparse.Namespace, settings: Settings) -> int:
+    from .store import VideoLibrary
+    from .summarize import summarize
+
+    settings = _answer_overrides(args, settings)
+    if settings.answer.provider == "none":
+        print("error: summaries need an LLM; use --provider ollama or --provider openai", file=sys.stderr)
+        return 1
+    if _ensure_llm(settings).answer.provider == "none":
+        print("error: summaries need an LLM (see the note above)", file=sys.stderr)
+        return 1
+    record = VideoLibrary(settings).resolve(args.video_ref)
+    summary = summarize(settings, record.video_id, force=args.force, progress=lambda f, m: print(f"  {m}...", file=sys.stderr))
+    print(f"{record.title}\n\n{textwrap.fill(summary.overview, 96)}\n")
+    for chapter in summary.chapters:
+        print(f"  [{format_ts(chapter.start)}] {chapter.title}" + (f" - {chapter.description}" if chapter.description else ""))
+    print(f"\n({summary.model}, {summary.created_at})")
+    return 0
+
+
 def cmd_delete(args: argparse.Namespace, settings: Settings) -> int:
     from .store import VideoLibrary
 
@@ -188,6 +262,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("query")
     p.add_argument("-k", type=int, default=5, help="number of results")
     p.set_defaults(func=cmd_search)
+
+    def add_llm_flags(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--provider", choices=["ollama", "openai", "none"], help="LLM provider (default from settings)")
+        p.add_argument("--model", help="model name, e.g. deepseek-r1:8b or gpt-4o-mini")
+        p.add_argument("--ollama-url", help="Ollama server URL (default http://localhost:11434)")
+
+    p = sub.add_parser("ask", help="answer a question about a video, with timestamps")
+    p.add_argument("video_ref")
+    p.add_argument("question")
+    p.add_argument("-k", type=int, help="number of chunks to retrieve (default 5)")
+    p.add_argument("--show-reasoning", action="store_true", help="print the model's reasoning (DeepSeek-R1)")
+    add_llm_flags(p)
+    p.set_defaults(func=cmd_ask)
+
+    p = sub.add_parser("summarize", help="summarize a video into an overview and chapters")
+    p.add_argument("video_ref")
+    p.add_argument("--force", action="store_true", help="regenerate instead of using the cached summary")
+    add_llm_flags(p)
+    p.set_defaults(func=cmd_summarize)
 
     p = sub.add_parser("delete", help="remove a video's index and artifacts")
     p.add_argument("video_ref")

@@ -100,6 +100,10 @@ class VideoLibrary:
 
     # ---------------------------------------------------------------- artifacts
 
+    def read_json(self, video_id: str, name: str, default: Any = None) -> Any:
+        path = self.path(video_id, name)
+        return _read_json(path) if path.is_file() else default
+
     def write_json(self, video_id: str, name: str, data: Any) -> None:
         if isinstance(data, list):
             data = [asdict(item) if is_dataclass(item) else item for item in data]

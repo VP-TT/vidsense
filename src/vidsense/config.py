@@ -69,6 +69,7 @@ class AnswerConfig:
     use_history: bool = True  # rewrite follow-up questions into standalone ones
     ollama_url: str = "http://localhost:11434"
     num_ctx: int = 8192  # Ollama context window; its own default is too small for summaries
+    num_predict: int = 4096  # Ollama cap on generated tokens, reasoning included, so a looping model stops
 
     @property
     def resolved_model(self) -> str:
