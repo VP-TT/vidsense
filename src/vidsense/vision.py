@@ -17,6 +17,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from .hub import load_local_first, quiet_transformers
+
 _load_lock = threading.RLock()
 
 # Averaging a few prompt templates is the standard CLIP zero-shot trick; it smooths
@@ -43,10 +45,11 @@ class ClipEncoder:
         import torch
         from transformers import CLIPModel, CLIPProcessor
 
+        quiet_transformers()
         self._torch = torch
         self.device = device or pick_device()
-        self.model = CLIPModel.from_pretrained(model_name).to(self.device).eval()
-        processor = CLIPProcessor.from_pretrained(model_name)
+        self.model = load_local_first(CLIPModel.from_pretrained, model_name).to(self.device).eval()
+        processor = load_local_first(CLIPProcessor.from_pretrained, model_name)
         self.image_processor = processor.image_processor
         self.tokenizer = processor.tokenizer
         self.dim = int(self.model.config.projection_dim)

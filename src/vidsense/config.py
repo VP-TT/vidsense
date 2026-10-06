@@ -49,7 +49,9 @@ class ProcessingConfig:
     # Chunking and text embeddings.
     max_chunk_chars: int = 900
     max_chunk_seconds: float = 45.0
-    min_chunk_chars: int = 60
+    min_chunk_chars: int = 60  # smaller chunks are folded into a neighbour
+    min_chunk_seconds: float = 5.0  # a scene change only splits a chunk at least this long
+    silence_gap: float = 8.0  # a pause this long always starts a new chunk
     embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     def to_dict(self) -> dict[str, Any]:

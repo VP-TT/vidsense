@@ -15,6 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .config import ProcessingConfig
+from .hub import load_local_first
 from .media import Progress, load_audio
 from .schemas import Segment
 from .timeutil import format_ts
@@ -38,10 +39,10 @@ def _load(model_name: str):
     from faster_whisper import WhisperModel
 
     if ctranslate2.get_cuda_device_count() > 0:
-        return WhisperModel(model_name, device="cuda", compute_type="float16")
+        return load_local_first(WhisperModel, model_name, device="cuda", compute_type="float16")
     # CTranslate2 has no Apple GPU backend, so on a Mac this runs on the CPU with int8 weights.
     threads = max(4, (os.cpu_count() or 8) // 2 + 1)
-    return WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=threads)
+    return load_local_first(WhisperModel, model_name, device="cpu", compute_type="int8", cpu_threads=threads)
 
 
 def load_whisper(model_name: str):
