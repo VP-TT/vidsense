@@ -15,15 +15,15 @@ from .timeutil import format_range, format_ts
 
 def _processing_overrides(args: argparse.Namespace, settings: Settings) -> Settings:
     changes = {
-        "whisper_model": args.whisper_model,
-        "language": args.language,
-        "frame_fps": args.fps,
-        "dtw_semantic_weight": args.semantic_weight,
+        "whisper_model": getattr(args, "whisper_model", None),
+        "language": getattr(args, "language", None),
+        "frame_fps": getattr(args, "fps", None),
+        "dtw_semantic_weight": getattr(args, "semantic_weight", None),
     }
     changes = {k: v for k, v in changes.items() if v is not None}
-    if args.translate:
+    if getattr(args, "translate", False):
         changes["translate"] = True
-    if args.no_tags:
+    if getattr(args, "no_tags", False):
         changes["visual_tags"] = False
     return replace(settings, processing=replace(settings.processing, **changes))
 
@@ -223,6 +223,35 @@ def cmd_delete(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_eval(args: argparse.Namespace, settings: Settings) -> int:
+    from .evaluate import evaluate, format_summary, load_activitynet, load_jsonl, write_report
+
+    settings = _answer_overrides(args, _processing_overrides(args, settings))
+    if args.activitynet:
+        if not args.video_dir:
+            print("error: --activitynet needs --video-dir with the downloaded videos", file=sys.stderr)
+            return 1
+        items = load_activitynet(args.activitynet[0], args.activitynet[1], args.video_dir, limit=args.limit)
+    elif args.qa_file:
+        items = load_jsonl(args.qa_file)[: args.limit or None]
+    else:
+        print("error: give a QA file (e.g. demo/demo_qa.jsonl) or --activitynet QUESTIONS ANSWERS", file=sys.stderr)
+        return 1
+    answers = args.answers or args.judge
+    if answers:
+        settings = _ensure_llm(settings)
+        if settings.answer.provider == "none":
+            print("note: no LLM, so only retrieval is evaluated", file=sys.stderr)
+            answers = False
+    summary, rows = evaluate(
+        settings, items, k=args.k, answers=answers, judge=args.judge and answers, progress=lambda m: print(m, file=sys.stderr)
+    )
+    print("\n" + format_summary(summary))
+    path = write_report(summary, rows, args.out or settings.data_dir / "eval")
+    print(f"\nPer-question results: {path}")
+    return 0
+
+
 def cmd_ui(args: argparse.Namespace, settings: Settings) -> int:
     import subprocess
     from pathlib import Path
@@ -295,6 +324,19 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("delete", help="remove a video's index and artifacts")
     p.add_argument("video_ref")
     p.set_defaults(func=cmd_delete)
+
+    p = sub.add_parser("eval", help="measure retrieval, answer accuracy and latency on a QA set")
+    p.add_argument("qa_file", nargs="?", help="JSONL with video, question, answer(s), start, end")
+    p.add_argument("--activitynet", nargs=2, metavar=("QUESTIONS", "ANSWERS"), help="ActivityNet-QA test_q.json and test_a.json")
+    p.add_argument("--video-dir", help="folder with the ActivityNet videos you downloaded")
+    p.add_argument("--limit", type=int, help="evaluate only the first N questions")
+    p.add_argument("-k", type=int, default=5, help="retrieval depth for hit@k (default 5)")
+    p.add_argument("--answers", action="store_true", help="also generate answers and score them")
+    p.add_argument("--judge", action="store_true", help="also grade answers with the LLM as a judge (implies --answers)")
+    p.add_argument("--out", help="folder for the report (default data/eval)")
+    p.add_argument("--whisper-model", help="Whisper model for videos that still need processing")
+    add_llm_flags(p)
+    p.set_defaults(func=cmd_eval)
 
     p = sub.add_parser("ui", help="open the Streamlit app")
     p.add_argument("--port", type=int, default=8501)

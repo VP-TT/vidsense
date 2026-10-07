@@ -185,18 +185,18 @@ SCENES = [
     Scene("outro", "That is the end of our tour. Thanks for watching the VidSense demo.", _title_card("Thanks for watching", "VidSense demo")),
 ]
 
-# (question, short answer, scene). An empty answer means the question is about finding a moment.
+# (question, acceptable short answers, scene). No answers means the question is about finding a moment.
 QUESTIONS = [
-    ("How old are some of the trees in the forest?", "more than two hundred years", "forest"),
-    ("How hot can it get in the desert?", "fifty degrees Celsius", "desert"),
-    ("What drifts across the waves?", "a small sailboat", "ocean"),
-    ("Where does traffic move slowly?", "past the tall office towers downtown", "city"),
-    ("When do the stars appear?", "when the sun goes down", "night"),
-    ("How many places does the tour visit?", "five", "intro"),
-    ("Show me the mountains at night", "", "night"),
-    ("When do we see tall buildings?", "", "city"),
-    ("Which part shows sand dunes and cactus?", "", "desert"),
-    ("When is the boat on the water shown?", "", "ocean"),
+    ("How old are some of the trees in the forest?", ["200 years", "two hundred years"], "forest"),
+    ("How hot can it get in the desert?", ["50 degrees", "fifty degrees"], "desert"),
+    ("What drifts across the waves?", ["sailboat", "boat"], "ocean"),
+    ("Where does traffic move slowly?", ["city", "downtown", "office towers"], "city"),
+    ("When do the stars appear?", ["sun goes down", "sunset", "night"], "night"),
+    ("How many places does the tour visit?", ["five"], "intro"),
+    ("Show me the mountains at night", [], "night"),
+    ("When do we see tall buildings?", [], "city"),
+    ("Which part shows sand dunes and cactus?", [], "desert"),
+    ("When is the boat on the water shown?", [], "ocean"),
 ]
 
 
@@ -288,10 +288,10 @@ def make_demo(out_dir: str | Path, scenes: list[Scene] | None = None, questions=
                 out.mux(packet)
 
     with qa_path.open("w", encoding="utf-8") as f:
-        for question, answer, key in questions:
+        for question, answers, key in questions:
             if key in spans:
                 start, end = spans[key]
-                row = {"video": str(video_path), "question": question, "answer": answer, "start": start, "end": end, "scene": key}
+                row = {"video": str(video_path), "question": question, "answers": answers, "start": start, "end": end, "scene": key}
                 f.write(json.dumps(row) + "\n")
     return video_path, qa_path
 
