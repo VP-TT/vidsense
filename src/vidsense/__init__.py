@@ -9,6 +9,9 @@ for _key, _value in {
     # openai/clip-vit-base-patch32 ships only pytorch_model.bin; without this, transformers
     # downloads a converted 600 MB safetensors copy in a background thread on first load.
     "DISABLE_SAFETENSORS_CONVERSION": "1",
+    # Download models over plain HTTPS, which honours timeouts and resumes, instead of the Hub's
+    # Xet transfer backend, which can stall with no timeout on some networks.
+    "HF_HUB_DISABLE_XET": "1",
 }.items():
     _os.environ.setdefault(_key, _value)
 

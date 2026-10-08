@@ -61,7 +61,7 @@ def make_chat_model(cfg: AnswerConfig):
             model=model,
             base_url=cfg.ollama_url,
             temperature=cfg.temperature,
-            num_ctx=cfg.num_ctx,  # Ollama's default window silently truncates long prompts
+            num_ctx=cfg.num_ctx,  # explicit window, so long prompts aren't silently truncated
             num_predict=cfg.num_predict,
             keep_alive="30m",
             reasoning=True if ollama_can_think(cfg.ollama_url, model) else None,

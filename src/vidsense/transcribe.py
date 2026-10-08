@@ -1,8 +1,10 @@
 """Speech to text with Whisper, using the faster-whisper (CTranslate2) implementation.
 
 faster-whisper runs the same Whisper weights roughly 4x faster than the reference
-implementation and returns segment timestamps, which is all VidSense needs: the
-segments become the text side of the DTW alignment.
+implementation. Whisper's own segments are decoding windows rather than sentences
+(large-v3-turbo happily ends one at "...five very different places around"), so we ask
+for word timestamps and re-cut the transcript into sentences. Sentences are the text
+side of the DTW alignment, and chunk boundaries can only fall between them.
 """
 
 from __future__ import annotations
@@ -23,6 +25,9 @@ from .timeutil import format_ts
 log = logging.getLogger(__name__)
 _load_lock = threading.Lock()
 SAMPLE_RATE = 16000  # Whisper's input rate
+_SENTENCE_END = (".", "?", "!", "…", "。", "？", "！")
+PAUSE_SECONDS = 1.5  # a silence this long ends a sentence even without punctuation
+MAX_SENTENCE_SECONDS = 20.0  # unpunctuated speech (lyrics, auto-captions style) is cut here
 
 
 @dataclass
@@ -65,13 +70,37 @@ def transcribe(path: str | Path, cfg: ProcessingConfig, progress: Progress | Non
         task=task,
         beam_size=cfg.beam_size,
         vad_filter=cfg.vad_filter,
+        word_timestamps=True,
     )
-    segments: list[Segment] = []
+    words, windows = [], []
     total = audio.size / SAMPLE_RATE
     for seg in segments_iter:  # a generator: decoding happens while we iterate
-        text = seg.text.strip()
-        if text:
-            segments.append(Segment(id=len(segments), start=round(seg.start, 2), end=round(seg.end, 2), text=text))
+        words.extend(seg.words or [])
+        if seg.text.strip():
+            windows.append(Segment(id=len(windows), start=round(seg.start, 2), end=round(seg.end, 2), text=seg.text.strip()))
         if progress and total:
             progress(min(seg.end / total, 1.0), f"transcribed {format_ts(seg.end)} of {format_ts(total)}")
-    return Transcript(segments, info.language, float(info.language_probability or 0.0), float(total))
+    sentences = split_sentences(words) if words else windows
+    return Transcript(sentences, info.language, float(info.language_probability or 0.0), float(total))
+
+
+def split_sentences(words) -> list[Segment]:
+    """Group timestamped words (objects with .start, .end, .word) into sentences."""
+    sentences: list[Segment] = []
+    current: list = []
+
+    def close() -> None:
+        text = "".join(w.word for w in current).strip()
+        if text:
+            sentences.append(Segment(id=len(sentences), start=round(current[0].start, 2), end=round(current[-1].end, 2), text=text))
+        current.clear()
+
+    for word in words:
+        if current and (word.start - current[-1].end > PAUSE_SECONDS or word.end - current[0].start > MAX_SENTENCE_SECONDS):
+            close()
+        current.append(word)
+        if word.word.strip().rstrip("\"'”’)]").endswith(_SENTENCE_END):
+            close()
+    if current:
+        close()
+    return sentences

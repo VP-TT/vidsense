@@ -9,20 +9,24 @@ keywords = ["video", "rag", "whisper", "clip", "langchain", "multimodal"]
 dependencies = [
     "numpy>=1.26",
     "pillow>=10.0",
-    "av>=12.0",
+    "av>=14.0",
     "faster-whisper>=1.1",
     "torch>=2.2",
     "transformers>=4.41",
     "sentence-transformers>=3.0",
     "scikit-learn>=1.4",
-    "chromadb>=0.5",
+    "chromadb>=1.0",
     "langchain-core>=0.3",
-    "langchain-ollama>=0.2",
+    "langchain-ollama>=0.3",
     "langchain-openai>=0.2",
-    "streamlit>=1.40",
+    "streamlit>=1.60",
     "python-dotenv>=1.0",
     "tqdm>=4.66",
 ]
+
+[project.urls]
+Homepage = "https://github.com/VP-TT/vidsense"
+Documentation = "https://github.com/VP-TT/vidsense/blob/main/docs/ARCHITECTURE.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

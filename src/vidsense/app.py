@@ -22,7 +22,7 @@ import streamlit as st
 from streamlit.errors import StreamlitAPIException
 
 from vidsense.config import DEFAULT_MODELS, PROVIDERS, AnswerConfig, ProcessingConfig, Settings, load_settings
-from vidsense.jobs import Job, JobManager
+from vidsense.jobs import JobManager
 from vidsense.schemas import Chunk, VideoRecord
 from vidsense.store import VideoLibrary
 from vidsense.timeutil import format_range, format_ts
