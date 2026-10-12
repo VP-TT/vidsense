@@ -63,6 +63,17 @@ def test_prompt_contains_timestamped_context_in_time_order(settings):
     assert prompt.rstrip().endswith("Question: How old are the trees?")
 
 
+def test_prompt_includes_an_outline_of_the_whole_video(settings):
+    from vidsense.qa import video_outline
+
+    VideoLibrary(settings).write_json("v", "chunks.json", CHUNKS)
+    prompt = qa.VideoQA(settings, "v", llm=ParrotFakeChatModel()).ask("What is the third scene?").text
+    assert "[00:15] Some of these trees are more than 200 years old. (on screen: a forest with trees)" in prompt
+    long = [Chunk(id=f"c{i}", index=i, start=float(i), end=i + 1.0, transcript="word " * 20) for i in range(100)]
+    lines = video_outline(long, max_lines=40).splitlines()
+    assert len(lines) <= 40 and lines[0].startswith("[00:00] word") and lines[0].endswith("...")
+
+
 def test_follow_up_is_rewritten_before_retrieval(settings, queries):
     model = FakeListChatModel(responses=["<think>resolve 'they'</think>How old are the trees in the forest?", "Over 200 years [00:15]."])
     history = [{"role": "user", "content": "Tell me about the forest."}, {"role": "assistant", "content": "It is a pine forest [00:15]."}]

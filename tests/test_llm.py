@@ -66,8 +66,10 @@ def test_cited_range_jumps_to_its_start_only():
 
 
 def test_bare_timestamps_count_only_inside_retrieved_excerpts():
-    text = "The stars appear from 00:40 to 00:46, after the 10:30 train and before [00:05]."
+    text = "The stars appear at 00:40 and again at 00:46, after the 10:30 train and before [00:05]."
     assert extract_citations(text, duration=100, source_ranges=[(40.0, 46.0)]) == [40, 46, 5]
+    ranged = "No cars in the excerpt from 00:40–00:49, nor from 00:40 to 00:49."
+    assert extract_citations(ranged, duration=100, source_ranges=[(40.0, 49.8)]) == [40]
     assert extract_citations(text, duration=100) == [5]
 
 

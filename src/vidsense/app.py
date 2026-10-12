@@ -21,7 +21,7 @@ from pathlib import Path
 import streamlit as st
 from streamlit.errors import StreamlitAPIException
 
-from vidsense.config import DEFAULT_MODELS, PROVIDERS, AnswerConfig, ProcessingConfig, Settings, load_settings
+from vidsense.config import DEFAULT_MODELS, DEFAULT_VISION_MODELS, PROVIDERS, AnswerConfig, ProcessingConfig, Settings, load_settings
 from vidsense.jobs import JobManager
 from vidsense.schemas import Chunk, VideoRecord
 from vidsense.store import VideoLibrary
@@ -58,6 +58,13 @@ def llm_status(provider: str, model: str, ollama_url: str) -> tuple[bool, str]:
     from vidsense.llm import check_llm
 
     return check_llm(AnswerConfig(provider=provider, model=model, ollama_url=ollama_url))
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def vision_status(provider: str, vision_model: str, ollama_url: str, look: bool) -> tuple[bool, str]:
+    from vidsense.llm import check_vision
+
+    return check_vision(AnswerConfig(provider=provider, vision_model=vision_model, ollama_url=ollama_url, look_at_frames=look))
 
 
 # ---------------------------------------------------------------- jumping
@@ -150,12 +157,42 @@ def answer_options(settings: Settings) -> AnswerConfig:
         top_k = st.slider("Excerpts per answer", 1, 10, a.top_k, key="llm_top_k")
         temperature = st.slider("Temperature", 0.0, 1.0, a.temperature, 0.05, key="llm_temperature")
         history = st.toggle("Use the conversation for follow-up questions", value=a.use_history, key="llm_history")
-        cfg = replace(a, provider=provider, model=model.strip(), top_k=top_k, temperature=temperature, use_history=history)
+        look = st.toggle(
+            "Look at the frames for each question",
+            value=a.look_at_frames,
+            disabled=provider == "none",
+            help="A vision model inspects the keyframes of the best-matching moments, so questions about what's "
+            "on screen (colours, objects, text) can be answered. Adds a few seconds per question.",
+            key="llm_look",
+        )
+        vision_model = st.text_input(
+            "Vision model",
+            value=a.vision_model if provider == a.provider else "",
+            placeholder=DEFAULT_VISION_MODELS[provider] or "none",
+            disabled=provider == "none" or not look,
+            key=f"llm_vision_{provider}",
+        )
+        cfg = replace(
+            a,
+            provider=provider,
+            model=model.strip(),
+            top_k=top_k,
+            temperature=temperature,
+            use_history=history,
+            look_at_frames=look,
+            vision_model=vision_model.strip(),
+        )
         ready, message = llm_status(cfg.provider, cfg.resolved_model, cfg.ollama_url)
         if ready:
             st.success(message, icon=":material/check_circle:")
         else:
             st.warning(message, icon=":material/warning:")
+        if ready and look:
+            seeing, vision_message = vision_status(cfg.provider, cfg.resolved_vision_model, cfg.ollama_url, look)
+            if seeing:
+                st.success(vision_message, icon=":material/visibility:")
+            else:
+                st.warning(vision_message, icon=":material/visibility_off:")
     return cfg
 
 
@@ -346,6 +383,8 @@ def source_rows(sources: list[dict], record: VideoRecord, library: VideoLibrary,
         with right:
             jump_button(src["start"], key=f"{key}-{j}", label=format_range(src["start"], src["end"]))
             st.caption(textwrap.shorten(src["transcript"] or "(no speech)", 240))
+            if src.get("seen"):
+                st.caption(f"Seen at {format_ts(src['seen_at'])}: {src['seen']}")
             details = []
             if src.get("tags"):
                 details.append("On screen: " + ", ".join(src["tags"][:3]))
@@ -371,6 +410,10 @@ def render_message(message: dict, index: int, record: VideoRecord, library: Vide
         if message.get("sources"):
             with st.expander(f"Sources ({len(message['sources'])})"):
                 source_rows(message["sources"], record, library, key=f"src-{record.video_id}-{index}")
+        if message.get("seen"):
+            with st.expander("What the vision model saw"):
+                for seconds, seen in message["seen"]:
+                    st.markdown(f"**{format_ts(seconds)}** {seen}")
         if message.get("reasoning"):
             with st.expander("Model reasoning"):
                 st.markdown(message["reasoning"])
@@ -381,14 +424,20 @@ def stream_answer(record: VideoRecord, settings: Settings, question: str, histor
     from vidsense.qa import VideoQA
 
     status = st.status("Searching the video...", expanded=False)
+    seen_box = status.empty()
     thinking = status.empty()
     output = st.empty()
-    reasoning, text, final = "", "", None
+    reasoning, text, final, seen = "", "", None, []
     try:
         qa = VideoQA(settings, record.video_id)
         for kind, payload in qa.stream(question, history):
             if kind == "sources":
                 status.update(label=f"Found {len(payload)} relevant moments" + (", writing the answer..." if qa.llm else ""))
+            elif kind == "looking":
+                status.update(label=f"Looking at {payload} frame{'s' if payload != 1 else ''}...")
+            elif kind == "seen":
+                seen.append(payload)
+                seen_box.markdown("\n\n".join(f"**{format_ts(t)}** {observed}" for t, observed in seen))
             elif kind == "reasoning":
                 reasoning += payload
                 status.update(label="Reasoning...")
@@ -408,6 +457,7 @@ def stream_answer(record: VideoRecord, settings: Settings, question: str, histor
         "reasoning": final.reasoning,
         "citations": final.citations,
         "sources": [doc.metadata for doc in final.sources],
+        "seen": final.observations,
         "model": final.model,
         "seconds": final.total_ms / 1000,
     }

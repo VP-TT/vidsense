@@ -19,7 +19,6 @@ import os
 import re
 import urllib.error
 import urllib.request
-from functools import lru_cache
 
 from .config import AnswerConfig
 from .timeutil import parse_ts
@@ -27,23 +26,42 @@ from .timeutil import parse_ts
 THINK_OPEN, THINK_CLOSE = "<think>", "</think>"
 
 
-@lru_cache(maxsize=16)
-def ollama_can_think(base_url: str, model: str, timeout: float = 3.0) -> bool:
-    """Whether Ollama reports the "thinking" capability (DeepSeek-R1, Qwen3, ...).
+_capabilities: dict[tuple[str, str], list[str]] = {}
 
-    For those models we ask Ollama to return the reasoning separately; sending that flag
-    to a model without the capability is an error, so other models get the default.
+
+def ollama_capabilities(base_url: str, model: str, timeout: float = 3.0) -> list[str]:
+    """What Ollama says a model can do: "completion", "vision", "thinking", ...
+
+    Only successful lookups are cached, so a model pulled while the app is running is
+    picked up on the next question.
     """
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/api/show",
-        data=json.dumps({"model": model}).encode(),
-        headers={"Content-Type": "application/json"},
-    )
+    key = (base_url, model)
+    if key not in _capabilities:
+        request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/api/show",
+            data=json.dumps({"model": model}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                _capabilities[key] = json.load(response).get("capabilities", [])
+        except (urllib.error.URLError, OSError, ValueError):
+            return []
+    return _capabilities[key]
+
+
+def ollama_can_think(base_url: str, model: str) -> bool:
+    """DeepSeek-R1, Qwen3 and similar models. For those we ask Ollama to return the reasoning
+    separately; sending that flag to a model without the capability is an error."""
+    return "thinking" in ollama_capabilities(base_url, model)
+
+
+def _ollama_models(base_url: str, timeout: float) -> set[str] | None:
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return "thinking" in json.load(response).get("capabilities", [])
+        with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/tags", timeout=timeout) as response:
+            return {m["name"] for m in json.load(response).get("models", [])}
     except (urllib.error.URLError, OSError, ValueError):
-        return False
+        return None
 
 
 def _accepts_temperature(model: str) -> bool:
@@ -83,14 +101,47 @@ def check_llm(cfg: AnswerConfig, timeout: float = 2.0) -> tuple[bool, str]:
         if not os.environ.get("OPENAI_API_KEY"):
             return False, "Set OPENAI_API_KEY in your shell or in a .env file to use OpenAI."
         return True, f"OpenAI · {model}"
-    try:
-        with urllib.request.urlopen(f"{cfg.ollama_url.rstrip('/')}/api/tags", timeout=timeout) as response:
-            names = {m["name"] for m in json.load(response).get("models", [])}
-    except (urllib.error.URLError, OSError, ValueError):
+    names = _ollama_models(cfg.ollama_url, timeout)
+    if names is None:
         return False, f"Ollama isn't running at {cfg.ollama_url}. Install it from ollama.com and start it (`ollama serve`)."
     if model not in names and f"{model}:latest" not in names:
         return False, f"The model {model} isn't downloaded yet. Run `ollama pull {model}`."
     return True, f"Ollama · {model}"
+
+
+def check_vision(cfg: AnswerConfig, timeout: float = 2.0) -> tuple[bool, str]:
+    """(ready, message) for the vision model that looks at keyframes."""
+    model = cfg.resolved_vision_model
+    if not cfg.look_at_frames or cfg.provider == "none" or not model:
+        return False, "Looking at frames is off."
+    if cfg.provider == "openai":
+        ready = bool(os.environ.get("OPENAI_API_KEY"))
+        return ready, f"Vision · {model}" if ready else "Set OPENAI_API_KEY to use OpenAI."
+    names = _ollama_models(cfg.ollama_url, timeout)
+    if names is None:
+        return False, f"Ollama isn't running at {cfg.ollama_url}."
+    if model not in names and f"{model}:latest" not in names:
+        return False, f"For questions about what's on screen, run `ollama pull {model}`."
+    if "vision" not in ollama_capabilities(cfg.ollama_url, model):
+        return False, f"{model} can't read images; use a vision model such as qwen2.5vl:3b."
+    return True, f"Vision · {model}"
+
+
+def make_vision_model(cfg: AnswerConfig):
+    """A chat model that reads images, for looking at keyframes; None when that's off."""
+    model = cfg.resolved_vision_model
+    if not cfg.look_at_frames or not model:
+        return None
+    if cfg.provider == "ollama":
+        from langchain_ollama import ChatOllama
+
+        return ChatOllama(model=model, base_url=cfg.ollama_url, temperature=0.1, num_ctx=4096, num_predict=256, keep_alive="30m")
+    if cfg.provider == "openai":
+        from langchain_openai import ChatOpenAI
+
+        extra = {"temperature": 0.1, "max_tokens": 256} if _accepts_temperature(model) else {}
+        return ChatOpenAI(model=model, **extra)
+    return None
 
 
 def message_text(content) -> str:
@@ -183,6 +234,8 @@ def extract_citations(
     """
     found: list[tuple[int, float]] = []  # (position in text, seconds)
     bracketed: list[tuple[int, int]] = []
+    # "00:40-00:49", "00:40 to 00:49": the second timestamp ends a range and is not a moment of its own.
+    range_ends = {m.start(1) for m in re.finditer(rf"{_TIMESTAMP.pattern}\s*(?:[-–—]|to)\s*({_TIMESTAMP.pattern})", text)}
     for group in _BRACKETED.finditer(text):
         bracketed.append(group.span())
         offset = group.start(1)
@@ -192,8 +245,8 @@ def extract_citations(
                 found.append((offset + part.start() + match.start(), parse_ts(match.group())))
     if source_ranges:
         for match in _TIMESTAMP.finditer(text):
-            if any(start <= match.start() < end for start, end in bracketed):
-                continue  # already handled above; the end of a cited range is not a moment of its own
+            if match.start() in range_ends or any(start <= match.start() < end for start, end in bracketed):
+                continue  # range ends, and bracketed timestamps already handled above
             seconds = parse_ts(match.group())
             if any(start - 1 <= seconds <= end + 1 for start, end in source_ranges):
                 found.append((match.start(), seconds))

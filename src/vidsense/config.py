@@ -16,6 +16,8 @@ from typing import Any
 
 PROVIDERS = ("ollama", "openai", "none")
 DEFAULT_MODELS = {"ollama": "deepseek-r1:8b", "openai": "gpt-4o-mini", "none": ""}
+# Vision-language models that look at keyframes for visual questions (gpt-4o-mini reads images too).
+DEFAULT_VISION_MODELS = {"ollama": "qwen2.5vl:3b", "openai": "gpt-4o-mini", "none": ""}
 
 
 @dataclass(frozen=True)
@@ -70,13 +72,20 @@ class AnswerConfig:
     ollama_url: str = "http://localhost:11434"
     num_ctx: int = 8192  # Ollama context window, set explicitly so long prompts aren't truncated
     num_predict: int = 4096  # Ollama cap on generated tokens, reasoning included, so a looping model stops
+    look_at_frames: bool = True  # let a vision model inspect the retrieved keyframes for each question
+    vision_model: str = ""  # empty means the provider default in DEFAULT_VISION_MODELS
+    vision_frames: int = 2  # keyframes inspected per question, best-matching moments first
 
     @property
     def resolved_model(self) -> str:
         return self.model or DEFAULT_MODELS.get(self.provider, "")
 
+    @property
+    def resolved_vision_model(self) -> str:
+        return self.vision_model or DEFAULT_VISION_MODELS.get(self.provider, "")
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self) | {"model": self.resolved_model}
+        return asdict(self) | {"model": self.resolved_model, "vision_model": self.resolved_vision_model}
 
 
 @dataclass(frozen=True)

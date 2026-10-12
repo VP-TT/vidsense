@@ -117,6 +117,33 @@ def sample_frames(
                 progress(min(t / duration, 1.0), f"frames sampled up to {t:.0f}s")
 
 
+def grab_frame(path: str | Path, seconds: float, max_side: int = 768) -> Image.Image:
+    """The frame shown at `seconds`, upright, scaled so its longer side is at most max_side.
+
+    Seeks to the keyframe before the target and decodes forward, so it costs a fraction
+    of a second rather than a pass over the whole video.
+    """
+    with av.open(str(path)) as container:
+        stream = container.streams.video[0]
+        offset = container.start_time / av.time_base if container.start_time else 0.0
+        target = max(0.0, seconds) + offset
+        container.seek(int(target / stream.time_base), stream=stream, backward=True)
+        chosen = None
+        for frame in container.decode(stream):
+            if frame.time is None:
+                continue
+            chosen = frame
+            if frame.time + 1e-3 >= target:
+                break
+        if chosen is None:
+            raise ValueError(f"no frame at {seconds:.1f}s in {path}")
+        image = chosen.to_image()
+        if chosen.rotation % 360:
+            image = image.rotate(chosen.rotation, expand=True)
+    image.thumbnail((max_side, max_side))
+    return image
+
+
 def load_audio(path: str | Path, sample_rate: int = 16000) -> np.ndarray:
     """Decode the first audio stream to mono float32 at `sample_rate` (Whisper expects 16 kHz).
 

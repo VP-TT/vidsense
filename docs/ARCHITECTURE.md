@@ -191,14 +191,23 @@ is a settings change.
    retrieval uses the rewritten question.
 2. **Retrieval.** The top 5 chunks, shown to the model in time order with their time
    ranges, what was said, and what was on screen (flagged as automatic labels).
-3. **Prompt.** Answer only from the excerpts, say so when the answer isn't there, and
+3. **Looking at frames.** DeepSeek-R1 reads only text, and the index holds what was said
+   plus coarse CLIP labels ("cars on a road"), so a question about something shown but
+   never said ("what colour are the cars?") can't be answered from the excerpts. A small
+   vision-language model (Qwen2.5-VL 3B through Ollama, or gpt-4o-mini) therefore looks at
+   the keyframes of the two best-matching moments, decoded sharp from the source video,
+   with the question in mind. Its observations ("the cars are red, blue and yellow") are
+   added to those excerpts; frames where it sees nothing relevant are dropped, and if the
+   vision model is missing or fails, the answer goes ahead without it. This costs a few
+   seconds per question and can be switched off.
+4. **Prompt.** Answer only from the excerpts, say so when the answer isn't there, and
    cite `[mm:ss]` after each claim.
-4. **Reasoning models.** DeepSeek-R1 thinks before answering. When Ollama reports the
+5. **Reasoning models.** DeepSeek-R1 thinks before answering. When Ollama reports the
    `thinking` capability, VidSense asks for the reasoning in a separate field; servers
    that inline it as `<think>…</think>` are handled by a streaming splitter that copes with
    tags cut across chunks. The reasoning is shown folded away in the UI and never reaches
    the answer or the citations.
-5. **Citations.** Timestamps in brackets are parsed from the answer; bare ones count
+6. **Citations.** Timestamps in brackets are parsed from the answer; bare ones count
    when they fall inside a retrieved excerpt (small models often drop the brackets);
    timestamps past the end of the video are discarded. Each becomes a jump button.
 
@@ -251,9 +260,10 @@ The local design maps onto a service without changing the pipeline:
 
 ## 13. Known limitations
 
-- The visual side is reduced to CLIP labels from a fixed vocabulary, so questions about
-  something shown but never said, and not in the vocabulary, can't be answered.
-  Captioning keyframes or a multimodal LLM over the retrieved keyframes would fix that.
+- Visual questions depend on retrieval finding the right moment first: the vision model
+  only looks at the top two moments, which are found through speech and CLIP labels.
+  Captioning every keyframe during processing would make unspoken, unlabelled objects
+  searchable too, at the cost of processing time.
 - Alignment and jumps are segment-level; word timestamps would make them finer.
 - Retrieval is dense only; adding BM25 (hybrid search) and a cross-encoder re-ranker
   would help exact names and rare terms.

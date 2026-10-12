@@ -29,10 +29,12 @@ def _processing_overrides(args: argparse.Namespace, settings: Settings) -> Setti
 
 
 def _answer_overrides(args: argparse.Namespace, settings: Settings) -> Settings:
-    changes = {"provider": args.provider, "model": args.model, "ollama_url": args.ollama_url}
+    changes = {"provider": args.provider, "model": args.model, "ollama_url": args.ollama_url, "vision_model": getattr(args, "vision_model", None)}
     changes = {k: v for k, v in changes.items() if v is not None}
     if "provider" in changes and "model" not in changes:
         changes["model"] = ""  # the new provider's default model
+    if getattr(args, "no_look", False):
+        changes["look_at_frames"] = False
     if getattr(args, "k", None):
         changes["top_k"] = args.k
     return replace(settings, answer=replace(settings.answer, **changes))
@@ -46,6 +48,12 @@ def _ensure_llm(settings: Settings) -> Settings:
     if not ready and settings.answer.provider != "none":
         print(f"note: {message}\nShowing the best-matching moments instead.\n", file=sys.stderr)
         return replace(settings, answer=replace(settings.answer, provider="none"))
+    if ready and settings.answer.look_at_frames:
+        from .llm import check_vision
+
+        vision_ready, vision_message = check_vision(settings.answer)
+        if not vision_ready:
+            print(f"note: {vision_message} Answering from the transcript and labels only.\n", file=sys.stderr)
     return settings
 
 
@@ -177,6 +185,8 @@ def cmd_ask(args: argparse.Namespace, settings: Settings) -> int:
         elif kind == "reasoning" and not thinking:
             print("(thinking...)", end="\r", flush=True, file=sys.stderr)
             thinking = True
+        elif kind == "looking":
+            print(f"(looking at {payload} frame{'s' if payload != 1 else ''}...)", file=sys.stderr, flush=True)
         elif kind == "done":
             answer = payload
     if thinking:  # end the reasoning block, or erase the "(thinking...)" note
@@ -188,6 +198,10 @@ def cmd_ask(args: argparse.Namespace, settings: Settings) -> int:
         meta = doc.metadata
         snippet = meta["transcript"] or "On screen: " + "; ".join(meta["tags"])
         print(f"  [{format_range(meta['start'], meta['end'])}] {textwrap.shorten(snippet, 90)}")
+    if answer.observations:
+        print("\nSeen in the frames:")
+        for seconds, seen in answer.observations:
+            print(f"  [{format_ts(seconds)}] {textwrap.shorten(seen, 110)}")
     cited = ", ".join(format_ts(t) for t in answer.citations) or "none"
     print(f"\nCited: {cited} | retrieval {answer.retrieval_ms:.0f} ms, total {answer.total_ms / 1000:.1f} s, {answer.model}")
     return 0
@@ -313,6 +327,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("question")
     p.add_argument("-k", type=int, help="number of chunks to retrieve (default 5)")
     p.add_argument("--show-reasoning", action="store_true", help="print the model's reasoning (DeepSeek-R1)")
+    p.add_argument("--no-look", action="store_true", help="don't let the vision model look at the keyframes")
+    p.add_argument("--vision-model", help="vision model that looks at keyframes, e.g. qwen2.5vl:3b")
     add_llm_flags(p)
     p.set_defaults(func=cmd_ask)
 

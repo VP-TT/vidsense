@@ -1,8 +1,8 @@
 """Question answering over one video with LangChain.
 
-    question ─▶ (follow-up? rewrite it with the chat history) ─▶ VideoRetriever ─▶ prompt ─▶ chat model
-                                                                                              │
-                     answer with [mm:ss] citations  ◀── strip <think> reasoning ◀─────────────┘
+    question ─▶ (follow-up? rewrite it with the chat history) ─▶ VideoRetriever ─▶ look at the top keyframes
+                                                                                              │ (vision model)
+                     answer with [mm:ss] citations  ◀── chat model ◀── prompt ◀──────────────┘
 
 LangChain is the orchestration layer here: the retriever is a LangChain retriever, the
 prompts are ChatPromptTemplates, and `prompt | model` is an LCEL chain, so swapping
@@ -11,6 +11,7 @@ DeepSeek-R1 on Ollama for an OpenAI model is a settings change.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
@@ -23,22 +24,40 @@ from pydantic import ConfigDict
 
 from .config import Settings
 from .embed import load_embedder
-from .llm import ReasoningSplitter, extract_citations, make_chat_model, message_text, split_reasoning
+from .llm import (
+    ReasoningSplitter,
+    check_vision,
+    extract_citations,
+    make_chat_model,
+    make_vision_model,
+    message_text,
+    split_reasoning,
+)
+from .look import describe, frame_image, frames_to_inspect
 from .retrieval import search
+from .schemas import Chunk
 from .store import VideoLibrary
 from .timeutil import format_range, format_ts
 
 SYSTEM_PROMPT = """You are VidSense. You answer questions about one video using excerpts from it.
-Each excerpt shows its time range, what was said (a Whisper transcript) and what was on screen \
-(automatic CLIP labels, which can be wrong).
+Each excerpt shows its time range, what was said (a Whisper transcript), what was on screen \
+(automatic CLIP labels, which can be wrong) and sometimes what a vision model saw when it \
+looked at that moment's frame for this question. Trust the vision model's observations for \
+visual details such as colours, objects and on-screen text.
 
 Rules:
 - Answer only from the excerpts. If they don't contain the answer, say you couldn't find it in the video.
+- If the question is ambiguous (for example, which scene "the third one" means), pick the most likely \
+reading from the excerpts, say which one you picked, and answer it. Don't deliberate at length.
 - After each claim, cite the moment as [mm:ss] (or [h:mm:ss] for long videos), using the excerpt's start time.
 - Keep it short: one to four sentences, or a short list when the question asks for steps.
 - Talk about "the video", never about "excerpts"."""
 
 HUMAN_PROMPT = """Video: {title} (length {duration})
+
+Outline of the whole video, one line per moment (use it for questions about order or \
+position, such as "the third scene" or "what happens after the forest"):
+{outline}
 
 Excerpts:
 {context}
@@ -52,6 +71,8 @@ Conversation:
 {history}
 
 Follow-up question: {question}"""
+
+log = logging.getLogger(__name__)
 
 QA_TEMPLATE = ChatPromptTemplate.from_messages([("system", SYSTEM_PROMPT), ("human", HUMAN_PROMPT)])
 CONDENSE_TEMPLATE = ChatPromptTemplate.from_messages([("human", CONDENSE_PROMPT)])
@@ -93,9 +114,27 @@ def format_context(docs: Sequence[Document]) -> str:
         lines = [f"[{number}] {format_range(meta['start'], meta['end'])}", f'Said: "{said}"']
         if meta["tags"]:
             lines.append("On screen: " + "; ".join(meta["tags"]))
+        if meta.get("seen"):
+            lines.append(f"Looked at the frame ({format_ts(meta['seen_at'])}): {meta['seen']}")
         blocks.append("\n".join(lines))
     # Chronological order reads more naturally to the model than relevance order.
     return "\n\n".join(b for _, b in sorted(zip((d.metadata["start"] for d in docs), blocks)))
+
+
+def video_outline(chunks: Sequence, max_lines: int = 40) -> str:
+    """One short line per chunk (time, opening words, top label), at most max_lines lines.
+
+    The excerpts are only the best matches, so on their own they can't tell the model
+    which scene is "the third one". Long videos are thinned to every n-th chunk.
+    """
+    step = max(1, -(-len(chunks) // max_lines))
+    lines = []
+    for chunk in list(chunks)[::step]:
+        words = chunk.transcript.split()
+        said = " ".join(words[:12]) + (" ..." if len(words) > 12 else "") if words else "(no speech)"
+        label = f" (on screen: {chunk.tags[0]})" if chunk.tags else ""
+        lines.append(f"[{format_ts(chunk.start)}] {said}{label}")
+    return "\n".join(lines)
 
 
 def format_history(history: Sequence[dict], turns: int = 3) -> str:
@@ -111,25 +150,31 @@ class Answer:
     reasoning: str = ""
     sources: list[Document] = field(default_factory=list)
     citations: list[float] = field(default_factory=list)  # cited timestamps in seconds
+    observations: list[tuple[float, str]] = field(default_factory=list)  # (keyframe time, what the vision model saw)
     model: str = ""
     retrieval_ms: float = 0.0
     total_ms: float = 0.0
 
 
-def _retrieval_only_answer(docs: Sequence[Document]) -> str:
+def _retrieval_only_answer(docs: Sequence[Document], intro: str = "No LLM is available, so here are the moments that best match your question:") -> str:
     if not docs:
         return "I couldn't find anything related in this video."
-    lines = ["No LLM is available, so here are the moments that best match your question:"]
+    lines = [intro]
     for doc in docs:
         snippet = doc.metadata["transcript"] or "On screen: " + "; ".join(doc.metadata["tags"])
         lines.append(f"- [{format_ts(doc.metadata['start'])}] {snippet[:200]}")
+        if doc.metadata.get("seen"):
+            lines.append(f"  Seen at [{format_ts(doc.metadata['seen_at'])}]: {doc.metadata['seen']}")
     return "\n".join(lines)
 
 
 class VideoQA:
-    def __init__(self, settings: Settings, video_id: str, llm=None):
+    def __init__(self, settings: Settings, video_id: str, llm=None, vision="auto"):
+        """`vision` is a chat model that reads images, None to never look at frames, or "auto"
+        to use the configured vision model when it is available."""
         self.settings = settings
-        self.record = VideoLibrary(settings).get(video_id)
+        self.library = VideoLibrary(settings)
+        self.record = self.library.get(video_id)
         if self.record is None or self.record.status != "ready":
             raise LookupError(f"video {video_id} is not processed")
         self.retriever = VideoRetriever(settings=settings, video_id=video_id, k=settings.answer.top_k)
@@ -137,6 +182,9 @@ class VideoQA:
         load_embedder(self.record.processing.get("embed_model", settings.processing.embed_model))
         self.llm = llm if llm is not None else make_chat_model(settings.answer)
         self.model_name = settings.answer.resolved_model if self.llm is not None else "retrieval only"
+        if vision == "auto":
+            vision = make_vision_model(settings.answer) if self.llm is not None and check_vision(settings.answer)[0] else None
+        self.vision = vision if self.record.has_video else None
 
     def standalone_question(self, question: str, history: Sequence[dict]) -> str:
         """Rewrite a follow-up ("what happens after that?") into a question retrieval can use."""
@@ -148,13 +196,31 @@ class VideoQA:
         return rewritten if 0 < len(rewritten) <= 400 else question
 
     def stream(self, question: str, history: Sequence[dict] = ()) -> Iterator[tuple[str, object]]:
-        """Yield ("sources", docs), then ("reasoning" | "answer", text) pieces, then ("done", Answer)."""
+        """Yield ("sources", docs); ("looking", n) and ("seen", (time, text)) when the vision model
+    inspects keyframes; ("reasoning" | "answer", text) pieces; then ("done", Answer)."""
         started = time.perf_counter()
         query = self.standalone_question(question, history)
         retrieval_start = time.perf_counter()
         docs = self.retriever.invoke(query)
         retrieval_ms = (time.perf_counter() - retrieval_start) * 1000
         yield "sources", docs
+
+        observations: list[tuple[float, str]] = []
+        if self.vision is not None and docs:
+            keyframes = {k.id: k for k in self.library.keyframes(self.record.video_id)}
+            picks = frames_to_inspect(docs, keyframes, self.settings.answer.vision_frames)
+            if picks:
+                yield "looking", len(picks)
+            for doc, keyframe in picks:
+                try:
+                    seen = describe(self.vision, frame_image(self.record, self.library, keyframe), query, keyframe.time)
+                except Exception as exc:  # a missing or failing vision model shouldn't cost the answer
+                    log.warning("the vision model couldn't look at %.1fs: %s", keyframe.time, exc)
+                    continue
+                if seen:
+                    doc.metadata["seen"], doc.metadata["seen_at"] = seen, keyframe.time
+                    observations.append((keyframe.time, seen))
+                    yield "seen", (keyframe.time, seen)
 
         reasoning, answer = [], []
         if self.llm is None:
@@ -164,6 +230,10 @@ class VideoQA:
             inputs = {
                 "title": self.record.title,
                 "duration": format_ts(self.record.duration),
+                "outline": video_outline(
+                    [Chunk.from_dict(c) for c in self.library.read_json(self.record.video_id, "chunks.json", default=[])]
+                )
+                or "(not available)",
                 "context": format_context(docs) if docs else "(nothing relevant was found)",
                 "question": query,
             }
@@ -183,8 +253,8 @@ class VideoQA:
         text = "".join(answer).strip()
         # Catch the case where only </think> appeared, so the stream couldn't tell thinking from answer.
         late_reasoning, text = split_reasoning(text)
-        if not text and self.llm is not None:
-            text = "The model returned no answer. Try again, or switch to a non-reasoning model."
+        if not text and self.llm is not None:  # e.g. a reasoning model used its whole token budget thinking
+            text = _retrieval_only_answer(docs, "The model ran out of room before answering, so here is what was found:")
         yield "done", Answer(
             question=question,
             search_query=query,
@@ -192,6 +262,7 @@ class VideoQA:
             reasoning="\n\n".join(p for p in ("".join(reasoning).strip(), late_reasoning) if p),
             sources=list(docs),
             citations=extract_citations(text, self.record.duration, [(d.metadata["start"], d.metadata["end"]) for d in docs]),
+            observations=observations,
             model=self.model_name,
             retrieval_ms=round(retrieval_ms, 1),
             total_ms=round((time.perf_counter() - started) * 1000, 1),

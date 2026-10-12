@@ -16,6 +16,8 @@ default, or an OpenAI model) for an answer with `[mm:ss]` citations. The UI is
 
 - **Ask** anything in plain language. Answers cite `[mm:ss]` moments, and every cited
   moment is a button that moves the player. Follow-up questions use the conversation.
+  Questions about what's on screen ("what colour are the cars?") work too: a vision
+  model looks at the frames of the matching moments.
 - **Summarize** the whole video into an overview and chapters you can jump to.
 - **Find moments** with semantic search over what was said *and* what was on screen,
   without an LLM.
@@ -53,9 +55,12 @@ flowchart LR
 5. **Chunking and retrieval.** The alignment is cut into chunks at scene changes and
    sentence ends. Each chunk's text ("what was said" plus "on screen: …") is embedded
    with MiniLM and stored in a per-video ChromaDB collection.
-6. **Answer.** LangChain retrieves the top chunks, rewrites follow-up questions into
-   standalone ones, and prompts the LLM to answer only from the excerpts and cite their
-   timestamps. DeepSeek-R1's reasoning is kept separate from the answer.
+6. **Answer.** LangChain retrieves the top chunks and rewrites follow-up questions into
+   standalone ones. A vision-language model (Qwen2.5-VL 3B) looks at the keyframes of the
+   two best-matching moments with the question in mind, and what it sees joins the
+   prompt, so visual details that were never said can be answered. The LLM then answers
+   only from the excerpts and cites their timestamps. DeepSeek-R1's reasoning is kept
+   separate from the answer.
 
 Two embedding spaces are involved, and only one is stored:
 
@@ -85,6 +90,7 @@ moments instead of a written answer):
 ```bash
 # Local, the default: install Ollama from https://ollama.com (or `brew install ollama`), then
 ollama pull deepseek-r1:8b   # ~5 GB; qwen2.5:7b answers faster if you don't need the reasoning
+ollama pull qwen2.5vl:3b     # 3.2 GB, optional: answers questions about what's on screen
 
 # Or OpenAI
 export VIDSENSE_LLM_PROVIDER=openai OPENAI_API_KEY=sk-...
@@ -129,6 +135,8 @@ The ones you are most likely to change:
 | `VIDSENSE_LANGUAGE` | auto-detect | e.g. `en` |
 | `VIDSENSE_LLM_PROVIDER` | `ollama` | `ollama`, `openai` or `none` |
 | `VIDSENSE_LLM_MODEL` | `deepseek-r1:8b` (Ollama), `gpt-4o-mini` (OpenAI) | |
+| `VIDSENSE_LLM_VISION_MODEL` | `qwen2.5vl:3b` (Ollama), `gpt-4o-mini` (OpenAI) | looks at keyframes for visual questions |
+| `VIDSENSE_LLM_LOOK_AT_FRAMES` | `true` | `false` skips the vision step (a few seconds faster per question) |
 | `OPENAI_BASE_URL` | – | any OpenAI-compatible server: DeepSeek's API, LM Studio, vLLM |
 | `VIDSENSE_DTW_SEMANTIC_WEIGHT` | `0.3` | `0` aligns by timestamps only |
 | `VIDSENSE_DATA_DIR` | `./data` | indexes, thumbnails and transcripts |
@@ -230,14 +238,18 @@ generated video with real models.
 - **A video doesn't play in the app**: browsers can't play MKV or AVI. Convert to MP4;
   search and answers work either way.
 - **Answers are slow**: DeepSeek-R1 reasons before it answers. `VIDSENSE_LLM_MODEL=qwen2.5:7b`
-  (after `ollama pull qwen2.5:7b`) answers several times faster.
+  (after `ollama pull qwen2.5:7b`) answers several times faster. Looking at frames adds a
+  few seconds; turn it off in the sidebar if your questions are only about what was said.
+- **Questions about what's on screen go unanswered**: run `ollama pull qwen2.5vl:3b`; the
+  sidebar shows whether the vision model is ready.
 
 ## Limitations
 
-- **Vision reaches answers only through CLIP labels**, which come from a fixed
-  vocabulary. A question about something that was shown but never said, and isn't in the
-  label list ("what colour is the car?"), can't be answered. Captioning keyframes
-  (BLIP-2, Florence-2) or sending them to a multimodal LLM would close that gap.
+- **Visual answers depend on retrieval finding the moment first.** The vision model only
+  looks at the keyframes of the two best-matching moments, and moments are found through
+  what was said and the CLIP labels. Something that is never mentioned and isn't in the
+  label vocabulary may not be retrieved; captioning every keyframe while processing
+  would fix that, at the cost of processing time.
 - **Timestamps are segment-level** (Whisper's accuracy is around half a second), and the
   Streamlit player seeks to whole seconds.
 - **Single-user and local:** one processing worker, data on disk. Serving many users
