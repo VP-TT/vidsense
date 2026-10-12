@@ -182,7 +182,9 @@ def extract_citations(
     end of the video are dropped: an invented moment shouldn't get a jump button.
     """
     found: list[tuple[int, float]] = []  # (position in text, seconds)
+    bracketed: list[tuple[int, int]] = []
     for group in _BRACKETED.finditer(text):
+        bracketed.append(group.span())
         offset = group.start(1)
         for part in re.finditer(r"[^,;]+", group.group(1)):
             match = _TIMESTAMP.search(part.group())
@@ -190,6 +192,8 @@ def extract_citations(
                 found.append((offset + part.start() + match.start(), parse_ts(match.group())))
     if source_ranges:
         for match in _TIMESTAMP.finditer(text):
+            if any(start <= match.start() < end for start, end in bracketed):
+                continue  # already handled above; the end of a cited range is not a moment of its own
             seconds = parse_ts(match.group())
             if any(start - 1 <= seconds <= end + 1 for start, end in source_ranges):
                 found.append((match.start(), seconds))

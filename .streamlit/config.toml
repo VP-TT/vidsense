@@ -1,4 +1,6 @@
 [server]
+# Only this machine can open the app; your videos and transcripts aren't served to the network.
+address = "localhost"
 # Uploads are held in memory; for bigger files use "From disk" in the sidebar.
 maxUploadSize = 1024
 # Streamlit's file watcher probes every loaded module, which makes transformers import

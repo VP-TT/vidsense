@@ -258,7 +258,8 @@ def cmd_ui(args: argparse.Namespace, settings: Settings) -> int:
 
     app = Path(__file__).with_name("app.py")
     command = [sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port)]
-    command += ["--browser.gatherUsageStats", "false", "--server.maxUploadSize", "1024", "--server.fileWatcherType", "none"]
+    command += ["--server.address", "localhost", "--browser.gatherUsageStats", "false"]
+    command += ["--server.maxUploadSize", "1024", "--server.fileWatcherType", "none"]
     return subprocess.call(command)
 
 

@@ -115,6 +115,30 @@ def parse_summary(text: str, duration: float | None = None) -> tuple[str, list[C
     return " ".join(overview).strip(), sorted(chapters, key=lambda c: c.start)
 
 
+def snap_chapters(
+    chapters: list[Chapter], chunk_starts: list[float], chapter_vectors, chunk_vectors, window: int = 2
+) -> list[Chapter]:
+    """Move each chapter to the chunk its text describes best, near the time the model gave.
+
+    Models copy timestamps from the transcript but sometimes shift them by a line (the
+    ocean chapter at 00:00 instead of 00:08). The chapter's own title and description say
+    which chunk it is about, so we compare them with the chunks within `window` positions
+    of the given time and take the best match. Vectors are L2-normalised MiniLM embeddings.
+    """
+    snapped: list[Chapter] = []
+    for chapter, vector in zip(chapters, chapter_vectors):
+        nearest = min(range(len(chunk_starts)), key=lambda i: abs(chunk_starts[i] - chapter.start))
+        low, high = max(0, nearest - window), min(len(chunk_starts), nearest + window + 1)
+        best = low + int((chunk_vectors[low:high] @ vector).argmax())
+        if all(abs(c.start - chunk_starts[best]) > 0.5 for c in snapped):  # two chapters on one chunk: keep the first
+            snapped.append(Chapter(start=chunk_starts[best], title=chapter.title, description=chapter.description))
+    return sorted(snapped, key=lambda c: c.start)
+
+
+def _tidy_title(title: str) -> str:
+    return title[:1] + title[1:].lower() if title.isupper() else title
+
+
 def _pack(lines: list[str], budget: int) -> list[str]:
     """Join lines into blocks of at most `budget` characters (a long line gets its own block)."""
     blocks, current = [], ""
@@ -177,6 +201,17 @@ def summarize(
         progress(0.9, "writing the summary")
     raw = run(SUMMARY_PROMPT, source=source, title=record.title, duration=format_ts(record.duration), text=text[:budget])
     overview, chapters = parse_summary(raw, record.duration)
+    chunks = library.chunks(video_id)
+    if chapters and chunks:
+        from .embed import embed_texts
+
+        model = record.processing.get("embed_model", settings.processing.embed_model)
+        chapters = snap_chapters(
+            [Chapter(c.start, _tidy_title(c.title), c.description) for c in chapters],
+            [c.start for c in chunks],
+            embed_texts([f"{c.title}. {c.description}" for c in chapters], model),
+            embed_texts([c.embedding_text() for c in chunks], model),
+        )
     summary = Summary(
         overview=overview or raw.strip(),
         chapters=chapters,

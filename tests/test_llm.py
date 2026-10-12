@@ -2,7 +2,9 @@ import pytest
 
 from vidsense.config import AnswerConfig
 from vidsense.llm import ReasoningSplitter, check_llm, extract_citations, split_reasoning
-from vidsense.summarize import parse_summary
+import numpy as np
+
+from vidsense.summarize import Chapter, parse_summary, snap_chapters
 
 
 @pytest.mark.parametrize(
@@ -58,6 +60,11 @@ def test_extract_citations(text, expected):
     assert extract_citations(text, duration=3800 if "1:02:05" in text else 100) == expected
 
 
+def test_cited_range_jumps_to_its_start_only():
+    text = "It can reach 50 degrees Celsius at noon. [00:32–00:37]"
+    assert extract_citations(text, duration=60, source_ranges=[(32.4, 37.9)]) == [32]
+
+
 def test_bare_timestamps_count_only_inside_retrieved_excerpts():
     text = "The stars appear from 00:40 to 00:46, after the 10:30 train and before [00:05]."
     assert extract_citations(text, duration=100, source_ranges=[(40.0, 46.0)]) == [40, 46, 5]
@@ -107,3 +114,20 @@ def test_parse_summary_inline_chapters_from_a_small_model():
         (40, "Night Sky", "Stars above the mountains."),
         (46, "The end", ""),
     ]
+
+
+def test_chapters_snap_to_the_chunk_they_describe():
+    # Chunks: intro, ocean, forest, city. The model shifted the first two chapters by one line.
+    chunk_vectors = np.eye(4)
+    chapters = [Chapter(0.0, "Open ocean"), Chapter(8.0, "Pine forest"), Chapter(24.0, "Busy city")]
+    chapter_vectors = np.array([[0.1, 0.9, 0, 0], [0, 0.2, 0.8, 0], [0, 0, 0.1, 0.9]])
+    snapped = snap_chapters(chapters, [0.0, 8.3, 17.1, 25.0], chapter_vectors, chunk_vectors)
+    assert [(c.start, c.title) for c in snapped] == [(8.3, "Open ocean"), (17.1, "Pine forest"), (25.0, "Busy city")]
+
+
+def test_snapping_stays_near_the_given_time_and_drops_duplicates():
+    chunk_vectors = np.eye(6)
+    far_match = np.array([[1.0, 0, 0, 0, 0, 0]])  # best match is chunk 0, but the chapter says 50 s
+    assert snap_chapters([Chapter(50.0, "x")], [0, 10, 20, 30, 40, 50], far_match, chunk_vectors)[0].start == 30
+    twins = snap_chapters([Chapter(10.0, "a"), Chapter(11.0, "b")], [0, 10, 20], np.array([[0, 1.0, 0], [0, 1.0, 0]]), np.eye(3))
+    assert [c.title for c in twins] == ["a"]

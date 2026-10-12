@@ -226,6 +226,7 @@ generated video with real models.
 - **The first video takes a while**: the first run downloads Whisper (`large-v3-turbo`
   is 1.6 GB), CLIP (600 MB) and MiniLM (90 MB). After that everything loads from the
   local cache and works offline. For a quick first try, set `VIDSENSE_WHISPER_MODEL=base`.
+- **Streamlit asks for an email address on its first launch**: press Enter to skip it.
 - **A video doesn't play in the app**: browsers can't play MKV or AVI. Convert to MP4;
   search and answers work either way.
 - **Answers are slow**: DeepSeek-R1 reasons before it answers. `VIDSENSE_LLM_MODEL=qwen2.5:7b`
